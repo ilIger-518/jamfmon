@@ -23,6 +23,9 @@ services:
       PGPORT: "5432"
       PGDATABASE: jamf_monitor
       PGUSER: jamf
+      INGEST_POLL_INTERVAL_SECONDS: "300"
+      INGEST_ERROR_BACKOFF_BASE_SECONDS: "15"
+      INGEST_ERROR_BACKOFF_MAX_SECONDS: "300"
     depends_on:
       - postgres
     deploy:
@@ -41,6 +44,8 @@ services:
       - jp_postgres_password
     volumes:
       - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     deploy:
       replicas: 1
       placement:

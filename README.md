@@ -15,7 +15,8 @@ The stack runs as Docker Swarm stack `jamfmon` with these services:
   - reads tenant config from Docker secret `/run/secrets/jp_tenants_json`
   - fetches token from Jamf Protect `/token`
   - executes GraphQL requests against `/graphql`
-  - upserts data into PostgreSQL
+   - upserts data into PostgreSQL
+   - runs continuously with polling + retry backoff
 
 ## Project Layout
 
@@ -26,6 +27,7 @@ The stack runs as Docker Swarm stack `jamfmon` with these services:
 - `ingestion/src/protectClient.ts`: token + GraphQL client
 - `ingestion/src/sync.ts`: upsert logic
 - `ingestion/src/queries.ts`: GraphQL queries
+- `db/schema.sql`: database schema for ingestion tables
 - `secrets/`: local source files for swarm secrets (ignored by git)
 
 ## Secrets and Configuration
@@ -108,6 +110,14 @@ docker stack ps jamfmon --no-trunc
 docker service logs --raw --tail 200 jamfmon_ingestion
 ```
 
+7. Apply schema (required before first successful ingestion run):
+
+```bash
+cid=$(docker ps --filter name=jamfmon_postgres.1 --format "{{.ID}}" | head -n 1)
+docker cp db/schema.sql "$cid":/tmp/schema.sql
+docker exec "$cid" sh -lc "PGPASSWORD=$(cat /run/secrets/jp_postgres_password) psql -v ON_ERROR_STOP=1 -U jamf -d jamf_monitor -f /tmp/schema.sql"
+```
+
 ## Known Failure Patterns
 
 - `pull access denied for jamfmon/ingestion`: local image not built yet
@@ -119,15 +129,20 @@ docker service logs --raw --tail 200 jamfmon_ingestion
 ## Current Operational Notes
 
 - Metabase on Apple Silicon needs a multi-arch tag. `metabase/metabase:latest` works in this environment.
-- Ingestion currently can fail fast when prerequisites are missing. During debugging, non-restarting behavior is preferred.
+- Ingestion runs as a daemon in this repository revision and remains `1/1` in Swarm.
+
+### Ingestion runtime controls
+
+Configured in `stack.local.yml` for service `ingestion`:
+
+- `INGEST_POLL_INTERVAL_SECONDS` (default: `300`)
+- `INGEST_ERROR_BACKOFF_BASE_SECONDS` (default: `15`)
+- `INGEST_ERROR_BACKOFF_MAX_SECONDS` (default: `300`)
 
 ## Next Steps
 
 1. Finalize and validate database schema initialization for tables used by ingestion (`tenants`, `protect_alerts`, `protect_computers`, `protect_computer_insights`).
-2. Decide ingestion runtime mode:
-   - one-shot/manual runs, or
-   - controlled periodic loop with backoff/retry.
-3. Validate data flow end-to-end:
+2. Validate data flow end-to-end:
    - successful ingestion run
    - row-count checks in PostgreSQL
    - Metabase schema sync and first dashboards.
