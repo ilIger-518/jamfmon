@@ -17,6 +17,8 @@ The stack runs as Docker Swarm stack `jamfmon` with these services:
   - executes GraphQL requests against `/graphql`
    - upserts data into PostgreSQL
    - runs continuously with polling + retry backoff
+   - writes runtime metrics to `ingestion_runtime_status`
+   - updates container heartbeat for health checks
 
 ## Project Layout
 
@@ -138,6 +140,26 @@ Configured in `stack.local.yml` for service `ingestion`:
 - `INGEST_POLL_INTERVAL_SECONDS` (default: `300`)
 - `INGEST_ERROR_BACKOFF_BASE_SECONDS` (default: `15`)
 - `INGEST_ERROR_BACKOFF_MAX_SECONDS` (default: `300`)
+- `INGEST_HEALTH_MAX_STALE_SECONDS` (default: `420`)
+
+### Runtime metrics
+
+`ingestion` upserts one status row into table `ingestion_runtime_status` with key `service_name='ingestion'`.
+
+Fields include:
+
+- `last_success_at`
+- `consecutive_failures`
+- `last_error`
+- `tenant_count`
+- `alerts_upserted`
+- `computers_upserted`
+
+Quick check:
+
+```sql
+select * from ingestion_runtime_status where service_name = 'ingestion';
+```
 
 ## Next Steps
 

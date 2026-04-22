@@ -26,6 +26,7 @@ services:
       INGEST_POLL_INTERVAL_SECONDS: "300"
       INGEST_ERROR_BACKOFF_BASE_SECONDS: "15"
       INGEST_ERROR_BACKOFF_MAX_SECONDS: "300"
+      INGEST_HEALTH_MAX_STALE_SECONDS: "420"
     depends_on:
       - postgres
     deploy:
