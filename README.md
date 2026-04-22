@@ -179,3 +179,23 @@ For this stack (inside swarm network):
 - Database: `jamf_monitor`
 - User: `jamf`
 - Password: value from local `secrets/postgres_password.txt`
+
+## Metabase Monitoring Cards
+
+Ready-to-use native SQL templates for ingestion monitoring are in:
+
+- `metabase/ingestion_runtime_questions.sql`
+
+Suggested cards to create in Metabase:
+
+- Current ingestion status (table)
+- Health state (`healthy` / `degraded` / `stale` / `never_succeeded`)
+- Minutes since last successful sync (single number)
+- Latest cycle throughput (`alerts_upserted`, `computers_upserted`)
+
+Quick setup:
+
+1. Open Metabase -> New -> SQL query.
+2. Choose database `jamf_monitor`.
+3. Copy one query block from `metabase/ingestion_runtime_questions.sql`.
+4. Save as question and add to a dashboard.
