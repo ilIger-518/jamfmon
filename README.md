@@ -57,6 +57,17 @@ Each tenant must contain at least:
 
 Critical rule: `tokenUrl` and `graphqlUrl` must use the same Protect org/subdomain.
 
+Optional Jamf Pro integration per tenant:
+
+- `jamfPro.baseUrl` (for example `https://your-org.jamfcloud.com`)
+- Auth mode A (OAuth client credentials, default):
+   - `jamfPro.clientId`
+   - `jamfPro.clientSecret`
+- Auth mode B (basic auth token endpoint):
+   - `jamfPro.authType = "basic"`
+   - `jamfPro.username`
+   - `jamfPro.password`
+
 ## Auth Flow (Jamf Protect)
 
 Token request format expected by this project:
@@ -192,6 +203,11 @@ Suggested cards to create in Metabase:
 - Health state (`healthy` / `degraded` / `stale` / `never_succeeded`)
 - Minutes since last successful sync (single number)
 - Latest cycle throughput (`alerts_upserted`, `computers_upserted`)
+
+Unified devices list (Protect + Pro):
+
+- Use `metabase/devices_question.sql`.
+- It combines `protect_computers` and `jamf_pro_computers` with a `source` column.
 
 Quick setup:
 

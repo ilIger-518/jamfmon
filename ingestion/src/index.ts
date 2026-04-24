@@ -3,7 +3,8 @@ import type { Pool } from "pg";
 import { loadTenantsFromSecret } from "./config.js";
 import { makePool } from "./db.js";
 import { getProtectToken } from "./protectClient.js";
-import { ensureTenantRow, syncAlerts, syncComputers } from "./sync.js";
+import { getJamfProToken } from "./jamfProClient.js";
+import { ensureJamfProSchema, ensureTenantRow, syncAlerts, syncComputers, syncJamfProComputers } from "./sync.js";
 
 function readSecretFile(path: string): string {
   return fs.readFileSync(path, "utf-8").trim();
@@ -180,6 +181,13 @@ async function runSingleCycle(): Promise<CycleStats> {
       const computers = await syncComputers(pool, t.tenantId, token, t.protect.graphqlUrl);
       totalComputers += computers;
       console.log(`[${t.tenantId}] computers upserted: ${computers}`);
+
+      if (t.jamfPro?.baseUrl) {
+        const jamfProToken = await getJamfProToken(t.jamfPro);
+        const jamfProComputers = await syncJamfProComputers(pool, t.tenantId, t.jamfPro, jamfProToken);
+        totalComputers += jamfProComputers;
+        console.log(`[${t.tenantId}] jamf pro computers upserted: ${jamfProComputers}`);
+      }
     }
   } finally {
     await pool.end();
@@ -204,6 +212,7 @@ async function main() {
 
   const statusPool = makePool();
   await ensureRuntimeStatusTable(statusPool);
+  await ensureJamfProSchema(statusPool);
 
   let consecutiveFailures = 0;
   let lastSuccessAt: Date | null = null;

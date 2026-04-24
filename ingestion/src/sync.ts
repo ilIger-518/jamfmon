@@ -1,9 +1,27 @@
 import { Pool } from "pg";
 import { graphql } from "./protectClient.js";
+import { listJamfProComputers } from "./jamfProClient.js";
+import type { TenantConfig } from "./config.js";
 import { LIST_ALERTS, LIST_COMPUTERS } from "./queries.js";
 
 function isoMinusMinutes(minutes: number) {
   return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
+function asBooleanOrNull(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value == null) return null;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value !== "string") return null;
+
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "enabled", "active", "authorized", "on", "pass", "passed"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "disabled", "inactive", "unauthorized", "off", "fail", "failed"].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 function readLookbackDays(name: string, fallbackDays: number): number | null {
@@ -27,6 +45,33 @@ export async function ensureTenantRow(pool: Pool, tenantId: string, name?: strin
          updated_at = now()`,
     [tenantId, name ?? tenantId]
   );
+}
+
+export async function ensureJamfProSchema(pool: Pool) {
+  await pool.query(`
+    create table if not exists jamf_pro_computers (
+      tenant_id text not null,
+      jamf_pro_id text not null,
+      udid text,
+      serial text,
+      host_name text,
+      platform text,
+      os_version text,
+      model_name text,
+      ip_address text,
+      managed boolean,
+      management_status text,
+      last_contact_at timestamptz,
+      raw jsonb not null default '{}'::jsonb,
+      row_updated_at timestamptz not null default now(),
+      primary key (tenant_id, jamf_pro_id)
+    )
+  `);
+
+  await pool.query(`
+    create index if not exists ix_jamf_pro_computers_tenant_last_contact
+      on jamf_pro_computers (tenant_id, last_contact_at desc)
+  `);
 }
 
 export async function syncAlerts(pool: Pool, tenantId: string, token: string, graphqlUrl: string) {
@@ -182,8 +227,8 @@ export async function syncComputers(pool: Pool, tenantId: string, token: string,
             c.connectionStatus ?? null,
             c.lastConnection ? new Date(c.lastConnection) : null,
             c.lastConnectionIp ?? null,
-            c.webProtectionActive ?? null,
-            c.fullDiskAccess ?? null,
+            asBooleanOrNull(c.webProtectionActive),
+            asBooleanOrNull(c.fullDiskAccess),
             c.insightsStatsPass ?? null,
             c.insightsStatsFail ?? null,
             c.insightsStatsUnknown ?? null,
@@ -214,8 +259,8 @@ export async function syncComputers(pool: Pool, tenantId: string, token: string,
               s.uuid ?? null,
               s.label ?? null,
               s.section ?? null,
-              s.pass ?? null,
-              s.enabled ?? null,
+              asBooleanOrNull(s.pass),
+              asBooleanOrNull(s.enabled),
               JSON.stringify(s.tags ?? [])
             ]
           );
@@ -232,6 +277,79 @@ export async function syncComputers(pool: Pool, tenantId: string, token: string,
     }
 
     if (!next) break;
+  }
+
+  return total;
+}
+
+export async function syncJamfProComputers(
+  pool: Pool,
+  tenantId: string,
+  jamfPro: NonNullable<TenantConfig["jamfPro"]>,
+  token: string
+) {
+  await ensureJamfProSchema(pool);
+  const computers = await listJamfProComputers(jamfPro, token);
+  let total = 0;
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    for (const c of computers) {
+      const general = c.general ?? {};
+      const osVersion =
+        (typeof c.operatingSystem === "object" && c.operatingSystem && "version" in c.operatingSystem
+          ? (c.operatingSystem as any).version
+          : undefined) ?? general.osVersion;
+
+      const jamfProId = c.id != null ? String(c.id) : null;
+      if (!jamfProId) continue;
+
+      await client.query(
+        `insert into jamf_pro_computers (
+           tenant_id, jamf_pro_id, udid, serial, host_name, platform, os_version, model_name,
+           ip_address, managed, management_status, last_contact_at, raw, row_updated_at
+         ) values (
+           $1,$2,$3,$4,$5,$6,$7,$8,
+           $9,$10,$11,$12,$13::jsonb, now()
+         )
+         on conflict (tenant_id, jamf_pro_id) do update set
+           udid = excluded.udid,
+           serial = excluded.serial,
+           host_name = excluded.host_name,
+           platform = excluded.platform,
+           os_version = excluded.os_version,
+           model_name = excluded.model_name,
+           ip_address = excluded.ip_address,
+           managed = excluded.managed,
+           management_status = excluded.management_status,
+           last_contact_at = excluded.last_contact_at,
+           raw = excluded.raw,
+           row_updated_at = now()`,
+        [
+          tenantId,
+          jamfProId,
+          general.udid ?? c.udid ?? null,
+          general.serialNumber ?? c.serialNumber ?? null,
+          general.name ?? null,
+          general.platform ?? null,
+          osVersion ?? null,
+          c.hardware?.model ?? null,
+          general.ipAddress ?? null,
+          asBooleanOrNull(general.managed),
+          general.managementStatus ?? null,
+          general.lastContactTime ? new Date(general.lastContactTime) : null,
+          JSON.stringify(c)
+        ]
+      );
+      total += 1;
+    }
+    await client.query("commit");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
   }
 
   return total;

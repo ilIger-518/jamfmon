@@ -93,6 +93,27 @@ create unique index if not exists ux_protect_insights_tenant_computer_insight
 create index if not exists ix_protect_insights_tenant_computer
   on protect_computer_insights (tenant_id, computer_uuid);
 
+create table if not exists jamf_pro_computers (
+  tenant_id text not null,
+  jamf_pro_id text not null,
+  udid text,
+  serial text,
+  host_name text,
+  platform text,
+  os_version text,
+  model_name text,
+  ip_address text,
+  managed boolean,
+  management_status text,
+  last_contact_at timestamptz,
+  raw jsonb not null default '{}'::jsonb,
+  row_updated_at timestamptz not null default now(),
+  primary key (tenant_id, jamf_pro_id)
+);
+
+create index if not exists ix_jamf_pro_computers_tenant_last_contact
+  on jamf_pro_computers (tenant_id, last_contact_at desc);
+
 create table if not exists ingestion_runtime_status (
   service_name text primary key,
   last_cycle_started_at timestamptz not null,

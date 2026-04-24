@@ -9,6 +9,14 @@ export type TenantConfig = {
     clientId: string;
     password: string;
   };
+  jamfPro?: {
+    baseUrl: string;
+    authType?: "client_credentials" | "basic";
+    clientId?: string;
+    clientSecret?: string;
+    username?: string;
+    password?: string;
+  };
 };
 
 export type TenantsFile = { tenants: TenantConfig[] };
