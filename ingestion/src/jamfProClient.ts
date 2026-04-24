@@ -11,13 +11,24 @@ type JamfProComputer = {
     platform?: string;
     osVersion?: string;
     ipAddress?: string;
+    lastIpAddress?: string;
+    lastReportedIp?: string;
+    lastReportedIpV4?: string;
     managementStatus?: string;
     managed?: boolean | string;
     lastContactTime?: string;
     lastEnrolledDate?: string;
+    remoteManagement?: {
+      managed?: boolean;
+    };
+    mdmCapable?: {
+      capable?: boolean;
+    };
   };
   hardware?: {
     model?: string;
+    modelIdentifier?: string;
+    serialNumber?: string;
   };
   operatingSystem?: {
     version?: string;
@@ -113,7 +124,9 @@ export async function listJamfProComputers(
     url.searchParams.set("page", String(page));
     url.searchParams.set("page-size", String(pageSize));
     url.searchParams.set("sort", "general.name:asc");
-    url.searchParams.set("section", "GENERAL");
+    url.searchParams.append("section", "GENERAL");
+    url.searchParams.append("section", "HARDWARE");
+    url.searchParams.append("section", "OPERATING_SYSTEM");
 
     const res = await fetch(url, {
       headers: {

@@ -29,6 +29,7 @@ from (
     plan_name,
     row_updated_at
   from protect_computers
+  where deleted_at is null
 
   union all
 
@@ -46,5 +47,6 @@ from (
     null::text as plan_name,
     row_updated_at
   from jamf_pro_computers
+  where deleted_at is null
 ) d
 order by last_seen desc nulls last, row_updated_at desc;

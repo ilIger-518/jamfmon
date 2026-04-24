@@ -62,6 +62,7 @@ export async function ensureJamfProSchema(pool: Pool) {
       managed boolean,
       management_status text,
       last_contact_at timestamptz,
+      deleted_at timestamptz,
       raw jsonb not null default '{}'::jsonb,
       row_updated_at timestamptz not null default now(),
       primary key (tenant_id, jamf_pro_id)
@@ -69,9 +70,79 @@ export async function ensureJamfProSchema(pool: Pool) {
   `);
 
   await pool.query(`
+    alter table jamf_pro_computers
+    add column if not exists deleted_at timestamptz
+  `);
+
+  await pool.query(`
     create index if not exists ix_jamf_pro_computers_tenant_last_contact
       on jamf_pro_computers (tenant_id, last_contact_at desc)
   `);
+
+  await pool.query(`
+    create index if not exists ix_jamf_pro_computers_tenant_deleted
+      on jamf_pro_computers (tenant_id, deleted_at)
+  `);
+}
+
+async function ensureProtectComputersSchema(pool: Pool) {
+  await pool.query(`
+    alter table protect_computers
+    add column if not exists deleted_at timestamptz
+  `);
+
+  await pool.query(`
+    create index if not exists ix_protect_computers_tenant_deleted
+      on protect_computers (tenant_id, deleted_at)
+  `);
+}
+
+async function softDeleteMissingProtectComputers(pool: Pool, tenantId: string, seenComputerUuids: string[]) {
+  if (seenComputerUuids.length === 0) {
+    await pool.query(
+      `update protect_computers
+       set deleted_at = now(),
+           row_updated_at = now()
+       where tenant_id = $1
+         and deleted_at is null`,
+      [tenantId]
+    );
+    return;
+  }
+
+  await pool.query(
+    `update protect_computers
+     set deleted_at = now(),
+         row_updated_at = now()
+     where tenant_id = $1
+       and deleted_at is null
+       and not (computer_uuid = any($2::text[]))`,
+    [tenantId, seenComputerUuids]
+  );
+}
+
+async function softDeleteMissingJamfProComputers(pool: Pool, tenantId: string, seenJamfProIds: string[]) {
+  if (seenJamfProIds.length === 0) {
+    await pool.query(
+      `update jamf_pro_computers
+       set deleted_at = now(),
+           row_updated_at = now()
+       where tenant_id = $1
+         and deleted_at is null`,
+      [tenantId]
+    );
+    return;
+  }
+
+  await pool.query(
+    `update jamf_pro_computers
+     set deleted_at = now(),
+         row_updated_at = now()
+     where tenant_id = $1
+       and deleted_at is null
+       and not (jamf_pro_id = any($2::text[]))`,
+    [tenantId, seenJamfProIds]
+  );
 }
 
 export async function syncAlerts(pool: Pool, tenantId: string, token: string, graphqlUrl: string) {
@@ -158,9 +229,13 @@ export async function syncAlerts(pool: Pool, tenantId: string, token: string, gr
 }
 
 export async function syncComputers(pool: Pool, tenantId: string, token: string, graphqlUrl: string) {
+  await ensureProtectComputersSchema(pool);
+
   const sinceIso = COMPUTERS_LOOKBACK_DAYS ? isoMinusMinutes(60 * 24 * COMPUTERS_LOOKBACK_DAYS) : undefined;
+  const canSoftDelete = !sinceIso;
   let next: string | undefined;
   let total = 0;
+  const seenComputerUuids = new Set<string>();
 
   while (true) {
     const input: any = {
@@ -183,14 +258,14 @@ export async function syncComputers(pool: Pool, tenantId: string, token: string,
              tenant_id, computer_uuid, serial, host_name, os_string, model_name, agent_version,
              created_at, updated_at_ts, connection_status, last_connection, last_connection_ip,
              web_protection_active, full_disk_access,
-             insights_pass, insights_fail, insights_unknown, insights_updated,
+             insights_pass, insights_fail, insights_unknown, insights_updated, deleted_at,
              plan_id, plan_name, tags, raw, row_updated_at
            ) values (
              $1,$2,$3,$4,$5,$6,$7,
              $8,$9,$10,$11,$12,
              $13,$14,
-             $15,$16,$17,$18,
-             $19,$20,$21::jsonb,$22::jsonb, now()
+             $15,$16,$17,$18,$19,
+             $20,$21,$22::jsonb,$23::jsonb, now()
            )
            on conflict (tenant_id, computer_uuid) do update set
              serial = excluded.serial,
@@ -209,6 +284,7 @@ export async function syncComputers(pool: Pool, tenantId: string, token: string,
              insights_fail = excluded.insights_fail,
              insights_unknown = excluded.insights_unknown,
              insights_updated = excluded.insights_updated,
+             deleted_at = null,
              plan_id = excluded.plan_id,
              plan_name = excluded.plan_name,
              tags = excluded.tags,
@@ -233,12 +309,17 @@ export async function syncComputers(pool: Pool, tenantId: string, token: string,
             c.insightsStatsFail ?? null,
             c.insightsStatsUnknown ?? null,
             c.insightsUpdated ? new Date(c.insightsUpdated) : null,
+            null,
             c.plan?.id ?? null,
             c.plan?.name ?? null,
             JSON.stringify(c.tags ?? []),
             JSON.stringify(c)
           ]
         );
+
+        if (c.uuid) {
+          seenComputerUuids.add(String(c.uuid));
+        }
 
         // optional: scorecard details
         for (const s of c.scorecard ?? []) {
@@ -279,6 +360,10 @@ export async function syncComputers(pool: Pool, tenantId: string, token: string,
     if (!next) break;
   }
 
+  if (canSoftDelete) {
+    await softDeleteMissingProtectComputers(pool, tenantId, Array.from(seenComputerUuids));
+  }
+
   return total;
 }
 
@@ -291,6 +376,7 @@ export async function syncJamfProComputers(
   await ensureJamfProSchema(pool);
   const computers = await listJamfProComputers(jamfPro, token);
   let total = 0;
+  const seenJamfProIds: string[] = [];
 
   const client = await pool.connect();
   try {
@@ -301,6 +387,28 @@ export async function syncJamfProComputers(
         (typeof c.operatingSystem === "object" && c.operatingSystem && "version" in c.operatingSystem
           ? (c.operatingSystem as any).version
           : undefined) ?? general.osVersion;
+      const serial =
+        general.serialNumber ??
+        c.serialNumber ??
+        c.hardware?.serialNumber ??
+        null;
+      const model =
+        c.hardware?.model ??
+        c.hardware?.modelIdentifier ??
+        null;
+      const ipAddress =
+        general.ipAddress ??
+        general.lastIpAddress ??
+        general.lastReportedIpV4 ??
+        general.lastReportedIp ??
+        null;
+      const managed =
+        asBooleanOrNull(general.managed) ??
+        asBooleanOrNull(general.remoteManagement?.managed) ??
+        asBooleanOrNull(general.mdmCapable?.capable);
+      const managementStatus =
+        general.managementStatus ??
+        (managed === true ? "Managed" : managed === false ? "Unmanaged" : null);
 
       const jamfProId = c.id != null ? String(c.id) : null;
       if (!jamfProId) continue;
@@ -308,10 +416,10 @@ export async function syncJamfProComputers(
       await client.query(
         `insert into jamf_pro_computers (
            tenant_id, jamf_pro_id, udid, serial, host_name, platform, os_version, model_name,
-           ip_address, managed, management_status, last_contact_at, raw, row_updated_at
+           ip_address, managed, management_status, last_contact_at, deleted_at, raw, row_updated_at
          ) values (
            $1,$2,$3,$4,$5,$6,$7,$8,
-           $9,$10,$11,$12,$13::jsonb, now()
+           $9,$10,$11,$12,$13,$14::jsonb, now()
          )
          on conflict (tenant_id, jamf_pro_id) do update set
            udid = excluded.udid,
@@ -324,26 +432,30 @@ export async function syncJamfProComputers(
            managed = excluded.managed,
            management_status = excluded.management_status,
            last_contact_at = excluded.last_contact_at,
+           deleted_at = null,
            raw = excluded.raw,
            row_updated_at = now()`,
         [
           tenantId,
           jamfProId,
           general.udid ?? c.udid ?? null,
-          general.serialNumber ?? c.serialNumber ?? null,
+          serial,
           general.name ?? null,
           general.platform ?? null,
           osVersion ?? null,
-          c.hardware?.model ?? null,
-          general.ipAddress ?? null,
-          asBooleanOrNull(general.managed),
-          general.managementStatus ?? null,
+          model,
+          ipAddress,
+          managed,
+          managementStatus,
           general.lastContactTime ? new Date(general.lastContactTime) : null,
+          null,
           JSON.stringify(c)
         ]
       );
+      seenJamfProIds.push(jamfProId);
       total += 1;
     }
+    await softDeleteMissingJamfProComputers(pool, tenantId, seenJamfProIds);
     await client.query("commit");
   } catch (e) {
     await client.query("rollback");

@@ -59,6 +59,7 @@ create table if not exists protect_computers (
   insights_fail integer,
   insights_unknown integer,
   insights_updated timestamptz,
+  deleted_at timestamptz,
   plan_id text,
   plan_name text,
   tags jsonb not null default '[]'::jsonb,
@@ -106,6 +107,7 @@ create table if not exists jamf_pro_computers (
   managed boolean,
   management_status text,
   last_contact_at timestamptz,
+  deleted_at timestamptz,
   raw jsonb not null default '{}'::jsonb,
   row_updated_at timestamptz not null default now(),
   primary key (tenant_id, jamf_pro_id)

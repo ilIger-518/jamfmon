@@ -16,7 +16,7 @@ services:
     secrets:
       - source: jp_postgres_password
         target: jp_postgres_password
-      - source: jp_tenants_json_v4
+      - source: jp_tenants_json_v5
         target: jp_tenants_json
     environment:
       PGHOST: postgres
@@ -104,5 +104,5 @@ secrets:
     external: true
   jp_metabase_secret_key:
     external: true
-  jp_tenants_json_v4:
+  jp_tenants_json_v5:
     external: true
