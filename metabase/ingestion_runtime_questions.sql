@@ -62,3 +62,53 @@ select
   updated_at
 from ingestion_runtime_status
 where service_name = 'ingestion';
+
+-- 6) Device inventory (latest seen first)
+select
+  tenant_id,
+  host_name,
+  serial,
+  os_string,
+  model_name,
+  agent_version,
+  connection_status,
+  last_connection,
+  web_protection_active,
+  full_disk_access,
+  plan_name,
+  row_updated_at
+from protect_computers
+order by last_connection desc nulls last, row_updated_at desc
+limit 500;
+
+-- 7) Device count by connection status
+select
+  coalesce(connection_status, 'unknown') as connection_status,
+  count(*) as device_count
+from protect_computers
+group by coalesce(connection_status, 'unknown')
+order by device_count desc;
+
+-- 8) Recently connected devices (last 7 days)
+select
+  tenant_id,
+  host_name,
+  serial,
+  last_connection,
+  connection_status
+from protect_computers
+where last_connection >= now() - interval '7 days'
+order by last_connection desc;
+
+-- 9) Devices without recent connection (older than 30 days or never)
+select
+  tenant_id,
+  host_name,
+  serial,
+  connection_status,
+  last_connection,
+  now() - last_connection as age_since_last_connection
+from protect_computers
+where last_connection is null
+   or last_connection < now() - interval '30 days'
+order by last_connection asc nulls first;

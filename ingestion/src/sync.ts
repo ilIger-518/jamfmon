@@ -6,6 +6,18 @@ function isoMinusMinutes(minutes: number) {
   return new Date(Date.now() - minutes * 60_000).toISOString();
 }
 
+function readLookbackDays(name: string, fallbackDays: number): number | null {
+  const raw = process.env[name];
+  if (!raw) return fallbackDays;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return fallbackDays;
+  if (parsed <= 0) return null;
+  return parsed;
+}
+
+const ALERTS_LOOKBACK_DAYS = readLookbackDays("INGEST_ALERTS_LOOKBACK_DAYS", 7);
+const COMPUTERS_LOOKBACK_DAYS = readLookbackDays("INGEST_COMPUTERS_LOOKBACK_DAYS", 14);
+
 export async function ensureTenantRow(pool: Pool, tenantId: string, name?: string) {
   await pool.query(
     `insert into tenants (tenant_id, name)
@@ -18,16 +30,16 @@ export async function ensureTenantRow(pool: Pool, tenantId: string, name?: strin
 }
 
 export async function syncAlerts(pool: Pool, tenantId: string, token: string, graphqlUrl: string) {
-  const sinceIso = isoMinusMinutes(60 * 24 * 7); // MVP: letzte 7 Tage; später aus sync_state
+  const sinceIso = ALERTS_LOOKBACK_DAYS ? isoMinusMinutes(60 * 24 * ALERTS_LOOKBACK_DAYS) : undefined;
   let next: string | undefined;
   let total = 0;
 
   while (true) {
     const input: any = {
       pageSize: 200,
-      order: { field: "updated", direction: "ASC" },
-      filter: { updated: { greaterThanOrEqual: sinceIso } }
+      order: { field: "updated", direction: "ASC" }
     };
+    if (sinceIso) input.filter = { updated: { greaterThanOrEqual: sinceIso } };
     if (next) input.next = next;
 
     const data = await graphql<any>(graphqlUrl, token, LIST_ALERTS, { input });
@@ -101,16 +113,16 @@ export async function syncAlerts(pool: Pool, tenantId: string, token: string, gr
 }
 
 export async function syncComputers(pool: Pool, tenantId: string, token: string, graphqlUrl: string) {
-  const sinceIso = isoMinusMinutes(60 * 24 * 14); // MVP: letzte 14 Tage (lastConnection)
+  const sinceIso = COMPUTERS_LOOKBACK_DAYS ? isoMinusMinutes(60 * 24 * COMPUTERS_LOOKBACK_DAYS) : undefined;
   let next: string | undefined;
   let total = 0;
 
   while (true) {
     const input: any = {
       pageSize: 200,
-      order: { field: ["lastConnection"], direction: "ASC" },
-      filter: { lastConnection: { greaterThanOrEqual: sinceIso } }
+      order: { field: ["lastConnection"], direction: "ASC" }
     };
+    if (sinceIso) input.filter = { lastConnection: { greaterThanOrEqual: sinceIso } };
     if (next) input.next = next;
 
     const data = await graphql<any>(graphqlUrl, token, LIST_COMPUTERS, { input });
