@@ -152,6 +152,33 @@ async function syncRuntimeStatus(pool: Pool, status: RuntimeStatus) {
   }
 }
 
+async function bootstrapStatusPool(): Promise<Pool> {
+  let statusPool: Pool | null = null;
+
+  while (true) {
+    try {
+      if (!process.env.PGPASSWORD) {
+        process.env.PGPASSWORD = readSecretFile("/run/secrets/jp_postgres_password");
+      }
+
+      statusPool ??= makePool();
+      await ensureRuntimeStatusTable(statusPool);
+      await ensureJamfProSchema(statusPool);
+      return statusPool;
+    } catch (error) {
+      console.error(`startup failed, retrying in ${ERROR_BACKOFF_BASE_MS}ms`);
+      console.error(error);
+
+      if (statusPool) {
+        await statusPool.end().catch(() => undefined);
+        statusPool = null;
+      }
+
+      await sleep(ERROR_BACKOFF_BASE_MS);
+    }
+  }
+}
+
 async function runSingleCycle(): Promise<CycleStats> {
   const tenants = loadTenantsFromSecret();
   console.log(`Loaded tenants: ${tenants.length}`);
@@ -201,18 +228,11 @@ async function runSingleCycle(): Promise<CycleStats> {
 }
 
 async function main() {
-  // Postgres password comes from a secret file mounted at /run/secrets/jp_postgres_password
-  if (!process.env.PGPASSWORD) {
-    process.env.PGPASSWORD = readSecretFile("/run/secrets/jp_postgres_password");
-  }
-
   console.log(
     `Ingestion daemon started (poll=${POLL_INTERVAL_MS}ms, backoffBase=${ERROR_BACKOFF_BASE_MS}ms, backoffMax=${ERROR_BACKOFF_MAX_MS}ms)`
   );
 
-  const statusPool = makePool();
-  await ensureRuntimeStatusTable(statusPool);
-  await ensureJamfProSchema(statusPool);
+  const statusPool = await bootstrapStatusPool();
 
   let consecutiveFailures = 0;
   let lastSuccessAt: Date | null = null;

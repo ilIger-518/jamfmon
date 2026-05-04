@@ -37,7 +37,7 @@ The stack runs as Docker Swarm stack `jamfmon` with these services:
 Docker secrets used by stack:
 
 - `jp_postgres_password` -> `/run/secrets/jp_postgres_password`
-- `jp_tenants_json_v3` -> target `/run/secrets/jp_tenants_json`
+- `jp_tenants_json_v5` -> target `/run/secrets/jp_tenants_json`
 - `jp_minio_root_user`
 - `jp_minio_root_password`
 - `jp_metabase_secret_key`
@@ -101,7 +101,7 @@ docker secret create jp_postgres_password secrets/postgres_password.txt
 docker secret create jp_minio_root_user secrets/minio_root_user.txt
 docker secret create jp_minio_root_password secrets/minio_root_password.txt
 docker secret create jp_metabase_secret_key secrets/metabase_secret_key.txt
-docker secret create jp_tenants_json_v3 secrets/tenants.json
+docker secret create jp_tenants_json_v5 secrets/tenants.json
 ```
 
 4. Deploy stack:
@@ -139,6 +139,49 @@ cid=$(docker ps --filter name=jamfmon_postgres.1 --format "{{.ID}}" | head -n 1)
 docker cp db/schema.sql "$cid":/tmp/schema.sql
 docker exec "$cid" sh -lc "PGPASSWORD=$(cat /run/secrets/jp_postgres_password) psql -v ON_ERROR_STOP=1 -U jamf -d jamf_monitor -f /tmp/schema.sql"
 ```
+
+## Full Cleanup / Teardown
+
+Use this when you want to remove all jamfmon resources from the Swarm host.
+
+1. Remove the stack services and network:
+
+```bash
+docker stack rm jamfmon
+```
+
+2. If Docker reports that a secret is still in use, find and remove the remaining service first:
+
+```bash
+docker service ls
+docker service rm secret-reader
+```
+
+3. Remove the Docker secrets created for jamfmon:
+
+```bash
+docker secret rm jp_postgres_password
+docker secret rm jp_minio_root_user
+docker secret rm jp_minio_root_password
+docker secret rm jp_metabase_secret_key
+docker secret rm jp_tenants_json_v5
+```
+
+4. Remove the persistent volumes used by jamfmon:
+
+```bash
+docker volume rm jamfmon_pg_data
+docker volume rm jamfmon_minio_data
+```
+
+5. Remove the local ingestion build image and any dangling build layers:
+
+```bash
+docker image rm jamfmon/ingestion:local
+docker image prune -f
+```
+
+If you want a stricter cleanup, use `docker volume ls` and `docker image ls` first to confirm the exact jamfmon-prefixed names on your host before removing them.
 
 ## Known Failure Patterns
 
