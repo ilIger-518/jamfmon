@@ -117,6 +117,15 @@ docker stack services jamfmon
 docker stack ps jamfmon --no-trunc
 ```
 
+If `docker secret rm jp_postgres_password` fails because another service still references it, inspect and remove that service on the Swarm server first:
+
+```bash
+docker service ls
+docker service inspect secret-reader
+docker service rm secret-reader
+docker secret rm jp_postgres_password
+```
+
 6. Inspect ingestion logs when failing:
 
 ```bash
@@ -136,6 +145,7 @@ docker exec "$cid" sh -lc "PGPASSWORD=$(cat /run/secrets/jp_postgres_password) p
 - `pull access denied for jamfmon/ingestion`: local image not built yet
 - `This node is not a swarm manager`: swarm not initialized
 - `Not Authorized` on GraphQL: token org and graphql org mismatch, or invalid permissions
+- `secret 'jp_postgres_password' is in use`: another Swarm service still references the secret, so remove or update that service first
 - ingestion restart loop: service exits with code `1` and swarm restarts tasks
 - `relation "tenants" does not exist`: database schema not initialized yet
 
